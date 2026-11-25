@@ -80,13 +80,23 @@ input:checked+.sw{background:var(--accent)}input:checked+.sw:after{transform:tra
 #tip .tag{display:inline-block;font-size:10px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;padding:1px 6px;border-radius:4px;color:#0b0d12;background:var(--c);margin-bottom:3px}
 #tip .sv{display:block;margin-top:4px;color:var(--accent);font-size:11px}
 #addrCanvas{position:absolute;inset:0;pointer-events:none;z-index:2}
+/* pegman street view takes over the map div: our map-only overlays must get out of the way,
+   otherwise address dots paint over the imagery and the key card covers Google's close button */
+body.svopen #addrCanvas,body.svopen .key,body.svopen .base,body.svopen #tip{display:none}
+#svExit{position:absolute;top:12px;right:12px;z-index:8;display:none;align-items:center;gap:7px;padding:8px 13px;border-radius:9px;
+  background:rgba(11,13,18,.92);border:1px solid var(--line);color:var(--text);font-size:12.5px;font-weight:500;
+  backdrop-filter:blur(8px);box-shadow:0 6px 24px rgba(0,0,0,.5)}
+#svExit:hover{background:rgba(11,13,18,1);border-color:#3d4557}
+#svExit svg{width:14px;height:14px}
+body.svopen #svExit{display:flex}
 /* street view panel */
 #sv{position:absolute;inset:auto 12px 12px 12px;height:42%;z-index:7;display:none;border:1px solid var(--line);border-radius:10px;overflow:hidden;box-shadow:0 12px 40px rgba(0,0,0,.6)}
 #sv.on{display:block}
 #svPane{position:absolute;inset:0}
-#svClose{position:absolute;top:8px;right:8px;z-index:2;width:28px;height:28px;border-radius:7px;background:rgba(11,13,18,.85);border:1px solid var(--line);display:flex;align-items:center;justify-content:center}
-#svClose svg{width:15px;height:15px}
-#svTitle{position:absolute;top:8px;left:8px;z-index:2;background:rgba(11,13,18,.85);border:1px solid var(--line);border-radius:7px;padding:5px 10px;font-size:12px;max-width:60%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#svClose{position:absolute;top:8px;right:8px;z-index:9;display:flex;align-items:center;gap:6px;height:30px;padding:0 11px;border-radius:8px;background:rgba(11,13,18,.92);border:1px solid var(--line);color:var(--text);font-size:12px;font-weight:500;backdrop-filter:blur(8px);box-shadow:0 4px 16px rgba(0,0,0,.5)}
+#svClose:hover{background:#0b0d12;border-color:#3d4557}
+#svClose svg{width:13px;height:13px}
+#svTitle{position:absolute;top:8px;left:8px;z-index:8;background:rgba(11,13,18,.85);border:1px solid var(--line);border-radius:7px;padding:5px 10px;font-size:12px;max-width:60%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .gm-style .gm-style-iw-c{display:none}
 .darkmap .gm-style-cc,.darkmap .gmnoprint a,.darkmap .gm-style a[href*="maps.google"]{filter:invert(.92) hue-rotate(180deg)}
 ::-webkit-scrollbar{width:10px;height:10px}::-webkit-scrollbar-thumb{background:#2f3542;border-radius:6px;border:2px solid var(--panel)}::-webkit-scrollbar-thumb:hover{background:#3d4557}
@@ -117,7 +127,8 @@ input:checked+.sw{background:var(--accent)}input:checked+.sw:after{transform:tra
     <div class="body" id="keyBody"></div>
   </div>
   <div id="tip"></div>
-  <div id="sv"><div id="svPane"></div><div id="svTitle"></div><button id="svClose" title="Close Street View"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M18 6L6 18M6 6l12 12"/></svg></button></div>
+  <button id="svExit" title="Close Street View (Esc)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M18 6L6 18M6 6l12 12"/></svg>Exit Street View</button>
+  <div id="sv"><div id="svPane"></div><div id="svTitle"></div><button id="svClose" title="Close Street View (Esc)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M18 6L6 18M6 6l12 12"/></svg>Close</button></div>
 </div>
 </div>
 <script>
@@ -208,6 +219,21 @@ function boot(){
     visible:false, addressControl:false, fullscreenControl:true, motionTracking:false, motionTrackingControl:false, zoomControl:true});
   sv = document.getElementById('sv');
   document.getElementById('svClose').onclick = () => { sv.classList.remove('on'); svPano.setVisible(false); };
+
+  // the pegman drives the map's own panorama, which replaces the map inside #gmap.
+  // disableDefaultUI stripped its close button, so put the controls back and track its state.
+  const inlineSV = map.getStreetView();
+  inlineSV.setOptions({enableCloseButton:true, addressControl:true, fullscreenControl:false,
+                       motionTracking:false, motionTrackingControl:false, zoomControl:true,
+                       addressControlOptions:{position:google.maps.ControlPosition.TOP_LEFT}});
+  inlineSV.addListener('visible_changed', () => {
+    const on = inlineSV.getVisible();
+    document.body.classList.toggle('svopen', on);
+    if (on) hideTip(); else { drawAddr(); syncStops(); }
+  });
+  const exit = document.getElementById('svExit');
+  exit.onclick = () => inlineSV.setVisible(false);
+  ['mousedown','dblclick','wheel','touchstart'].forEach(ev => exit.addEventListener(ev, e=>e.stopPropagation(), {passive:false}));
   initLayers(); initKey(); initBase(); initStats(); initList(); initAddr();
 }
 window.boot = boot;
@@ -306,7 +332,7 @@ function syncZoom(){
 // 7.5k stop pins at once would swamp the map, so only build what's on screen
 function syncStops(){
   if (!D.stops || !D.stops.length) return;
-  const show = vis.Stop && map.getZoom() >= STOP_ZOOM;
+  const show = vis.Stop && map.getZoom() >= STOP_ZOOM && !document.body.classList.contains('svopen');
   if (!show){ stopMarkers.forEach(m=>m.setMap(null)); stopMarkers.clear(); return; }
   const b = map.getBounds(); if (!b) return;
   const want = new Set();
@@ -367,7 +393,7 @@ function drawAddr(){
   const r = mapEl.getBoundingClientRect();
   cx.clearRect(0,0,r.width,r.height);
   grid = null;
-  if (!vis.Address) return;
+  if (!vis.Address || document.body.classList.contains('svopen')) return;
   const b = map.getBounds(), proj = map.getProjection(); if (!b || !proj) return;
   const z = map.getZoom(), interactive = z >= ADDR_ZOOM;
   const rad = z>=16 ? 4.5 : z>=15 ? 4 : z>=14 ? 3.2 : interactive ? 2.6 : z>=11 ? 1.8 : 1.4;
@@ -514,7 +540,13 @@ function initList(){
   q.oninput = renderList;
   listEl.onclick = e=>{ const r=e.target.closest('.row'); if(r) select(r.dataset.n); };
   document.getElementById('back').onclick = showList;
-  document.addEventListener('keydown', e => { if (e.key==='Escape' && current) showList(); });
+  document.addEventListener('keydown', e => {
+    if (e.key !== 'Escape') return;
+    if (sv.classList.contains('on')) { sv.classList.remove('on'); svPano.setVisible(false); return; }
+    const inlineSV = map.getStreetView();
+    if (inlineSV.getVisible()) { inlineSV.setVisible(false); return; }
+    if (current) showList();
+  });
   document.getElementById('rhead').onclick = e => { if (e.target.id==='showall') { e.preventDefault(); focusRoute = null; select(current); } };
   document.getElementById('routes').onclick = e => { const r = e.target.closest('.route'); if (!r) return;
     const i = +r.dataset.i; focusRoute = (focusRoute===i)?null:i; select(current); };

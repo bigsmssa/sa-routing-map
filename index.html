@@ -49,7 +49,7 @@ aside{background:var(--panel);border-right:1px solid var(--line);min-height:0;po
 .route .k{font:500 11.5px/1.45 var(--mono);color:var(--muted);text-align:right;white-space:nowrap}
 .route .t{font-size:13px;min-width:0;font-weight:500}.route .t small{display:block;color:var(--muted);font-size:11.5px;font-weight:400;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .hint{padding:6px 16px;color:var(--muted);font-size:12px}
-#map{height:100%;min-height:0;background:var(--bg);position:relative}
+#map{height:100%;min-height:0;background:#eef0f4;position:relative}
 #gmap{position:absolute;inset:0}
 /* floating layer/key card */
 .key{position:absolute;top:12px;right:60px;z-index:5;width:270px;max-height:calc(100% - 90px);display:flex;flex-direction:column;background:rgba(22,25,32,.94);border:1px solid var(--line);border-radius:10px;backdrop-filter:blur(8px);box-shadow:0 8px 30px rgba(0,0,0,.45);font-size:12.5px}
@@ -88,7 +88,7 @@ input:checked+.sw{background:var(--accent)}input:checked+.sw:after{transform:tra
 #svClose svg{width:15px;height:15px}
 #svTitle{position:absolute;top:8px;left:8px;z-index:2;background:rgba(11,13,18,.85);border:1px solid var(--line);border-radius:7px;padding:5px 10px;font-size:12px;max-width:60%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .gm-style .gm-style-iw-c{display:none}
-.gm-style-cc,.gmnoprint a,.gm-style a[href*="maps.google"]{filter:invert(.92) hue-rotate(180deg)}
+.darkmap .gm-style-cc,.darkmap .gmnoprint a,.darkmap .gm-style a[href*="maps.google"]{filter:invert(.92) hue-rotate(180deg)}
 ::-webkit-scrollbar{width:10px;height:10px}::-webkit-scrollbar-thumb{background:#2f3542;border-radius:6px;border:2px solid var(--panel)}::-webkit-scrollbar-thumb:hover{background:#3d4557}
 @media (max-width:720px){#app{grid-template-columns:1fr;grid-template-rows:auto 1fr 45%}aside{order:3;border-right:0;border-top:1px solid var(--line)}.key{width:230px}}
 </style></head><body>
@@ -166,14 +166,36 @@ const DARK = [
   {featureType:'water',elementType:'labels.text.fill',stylers:[{color:'#3f5a74'}]},
 ];
 
+const LIGHT = [
+  {elementType:'geometry',stylers:[{color:'#f7f8fa'}]},
+  {elementType:'labels.text.fill',stylers:[{color:'#5c6373'}]},
+  {elementType:'labels.text.stroke',stylers:[{color:'#ffffff'}]},
+  {featureType:'administrative',elementType:'geometry.stroke',stylers:[{color:'#c9cfdb'}]},
+  {featureType:'administrative.locality',elementType:'labels.text.fill',stylers:[{color:'#3f4654'}]},
+  {featureType:'poi',stylers:[{visibility:'off'}]},
+  {featureType:'poi.park',elementType:'geometry',stylers:[{color:'#e3efe1'}]},
+  {featureType:'road',elementType:'geometry',stylers:[{color:'#ffffff'}]},
+  {featureType:'road',elementType:'labels.text.fill',stylers:[{color:'#767d8c'}]},
+  {featureType:'road.arterial',elementType:'geometry',stylers:[{color:'#ffffff'}]},
+  {featureType:'road.highway',elementType:'geometry',stylers:[{color:'#ffe9bd'}]},
+  {featureType:'road.highway',elementType:'geometry.stroke',stylers:[{color:'#f2d79a'}]},
+  {featureType:'road.highway',elementType:'labels.text.fill',stylers:[{color:'#6b7280'}]},
+  {featureType:'transit',stylers:[{visibility:'off'}]},
+  {featureType:'water',elementType:'geometry',stylers:[{color:'#cfe3f2'}]},
+  {featureType:'water',elementType:'labels.text.fill',stylers:[{color:'#7ea2bf'}]},
+];
+// label + dot colours have to flip with the basemap or they vanish
+const THEME = {light:{label:'#1f2430', addr:'#1d4ed8'}, dark:{label:'#ffffff', addr:'#60a5fa'}};
+let theme = 'light';
+
 let map, sv, svPano, tipEl, keyEl, mapEl;
 const ADDR_ZOOM = 13, LABEL_ZOOM = 13;
 
 function boot(){
   mapEl = document.getElementById('map'); tipEl = document.getElementById('tip'); keyEl = document.getElementById('key');
   map = new google.maps.Map(document.getElementById('gmap'), {
-    mapTypeId:'roadmap', styles:DARK, disableDefaultUI:true, zoomControl:true, scaleControl:true,
-    streetViewControl:true, gestureHandling:'greedy', tilt:0, clickableIcons:false, backgroundColor:'#0f1115',
+    mapTypeId:'roadmap', styles:LIGHT, disableDefaultUI:true, zoomControl:true, scaleControl:true,
+    streetViewControl:true, gestureHandling:'greedy', tilt:0, clickableIcons:false, backgroundColor:'#eef0f4',
     zoomControlOptions:{position:google.maps.ControlPosition.RIGHT_BOTTOM},
     streetViewControlOptions:{position:google.maps.ControlPosition.RIGHT_BOTTOM},
   });
@@ -242,14 +264,14 @@ function initLayers(){
     const lbl = new google.maps.Marker({position:{lat:s.ll[0],lng:s.ll[1]}, map:null, clickable:false, zIndex:300,
       icon:{url:BLANK, scaledSize:new google.maps.Size(1,1), anchor:new google.maps.Point(0,0),
             labelOrigin:new google.maps.Point(0, size/2 + 9)},
-      label:{text:s.name, color:'#ffffff', fontSize:'11px', fontWeight:'500'}});
+      label:{text:s.name, color:THEME.light.label, fontSize:'11px', fontWeight:'500'}});
     labelMarkers.push({m:lbl, type:s.type});
   });
   // depots
   depotMarkers = D.depots.map(d => {
     const m = new google.maps.Marker({position:{lat:d.ll[0],lng:d.ll[1]}, map, zIndex:600,
       icon:Object.assign(svgIcon(sym('Depot',22), 22), {labelOrigin:new google.maps.Point(11, 31)}),
-      label:{text:d.name, color:'#ffffff', fontSize:'11px', fontWeight:'500'}});
+      label:{text:d.name, color:THEME.light.label, fontSize:'11px', fontWeight:'500'}});
     const html = `<span class="tag" style="--c:${C.Depot}">Bus depot</span><br><b>${esc(d.name)}</b><br><span class="k">${d.code} · ${d.buses} buses based here</span><span class="sv">double-click for Street View</span>`;
     m.addListener('mouseover', ()=>tipAt(html, m.getPosition()));
     m.addListener('mouseout', hideTip);
@@ -318,7 +340,7 @@ function drawAddr(){
   const s0 = sw.lat(), n0 = ne.lat(), w0 = sw.lng(), e0 = ne.lng(), wrap = w0 > e0;
   const scale = Math.pow(2, z), o = merc(n0, w0);          // container origin = NW corner
   const g = interactive ? new Map() : null;
-  cx.fillStyle = C.Address; cx.globalAlpha = interactive ? .8 : .55;
+  cx.fillStyle = THEME[theme].addr; cx.globalAlpha = interactive ? .85 : .6;
   cx.beginPath();
   for (let i=0;i<D.addresses.length;i++){
     const a = D.addresses[i], la = a[0], lo = a[1];
@@ -332,8 +354,8 @@ function drawAddr(){
   cx.fill(); cx.globalAlpha = 1;
   grid = g; gridZ = z;
   if (hoverAddr){ const m = merc(hoverAddr[0], hoverAddr[1]), x = (m.x-o.x)*scale, y = (m.y-o.y)*scale;
-    cx.beginPath(); cx.arc(x,y,rad+3.5,0,6.2832); cx.fillStyle='#fff'; cx.fill();
-    cx.beginPath(); cx.arc(x,y,rad+1.2,0,6.2832); cx.fillStyle=C.Address; cx.fill(); }
+    cx.beginPath(); cx.arc(x,y,rad+3.5,0,6.2832); cx.fillStyle=theme==='light'?'#0b0d12':'#ffffff'; cx.fill();
+    cx.beginPath(); cx.arc(x,y,rad+1.2,0,6.2832); cx.fillStyle=THEME[theme].addr; cx.fill(); }
 }
 function pick(x, y){
   if (!grid) return null;
@@ -345,16 +367,32 @@ function pick(x, y){
   return best;
 }
 
-// ---- basemap switcher (roadmap / satellite / hybrid / terrain)
+// ---- basemap switcher (light / dark road map, satellite, hybrid, terrain)
+const BASES = [
+  ['Map','roadmap',LIGHT,'light','Clean light road map'],
+  ['Dark','roadmap',DARK,'dark','Styled dark road map'],
+  ['Satellite','satellite',null,'dark','Satellite imagery'],
+  ['Hybrid','hybrid',null,'dark','Satellite imagery with road labels'],
+  ['Terrain','terrain',null,'light','Terrain'],
+];
 function initBase(){
   const baseEl = document.getElementById('base');
-  [['Dark','roadmap'],['Satellite','satellite'],['Hybrid','hybrid'],['Terrain','terrain']].forEach(([lab,id],i)=>{
-    const b = document.createElement('button'); b.textContent = lab; b.className = i===0?'on':'';
-    b.title = id==='roadmap' ? 'Styled dark road map' : id==='hybrid' ? 'Satellite imagery with road labels' : id==='satellite' ? 'Satellite imagery' : 'Terrain';
-    b.onclick = ()=>{ map.setMapTypeId(id); map.setOptions({styles: id==='roadmap'?DARK:null});
-      baseEl.querySelectorAll('button').forEach(x=>x.classList.toggle('on',x===b)); };
+  BASES.forEach(([lab,id,st,th,tip],i)=>{
+    const b = document.createElement('button'); b.textContent = lab; b.className = i===0?'on':''; b.title = tip;
+    b.onclick = ()=>{ map.setMapTypeId(id); map.setOptions({styles: st});
+      baseEl.querySelectorAll('button').forEach(x=>x.classList.toggle('on',x===b)); applyTheme(th); };
     baseEl.appendChild(b);
   });
+  applyTheme('light');
+}
+function applyTheme(th){
+  if (th === theme) return;
+  theme = th;
+  document.body.classList.toggle('darkmap', th === 'dark');
+  const col = THEME[th].label;
+  labelMarkers.forEach(({m}) => { const l = m.getLabel(); if (l) { l.color = col; m.setLabel(l); } });
+  depotMarkers.forEach(m => { const l = m.getLabel(); if (l) { l.color = col; m.setLabel(l); } });
+  drawAddr();
 }
 
 // ---- layers & key card (one place: what each symbol means + toggle it)

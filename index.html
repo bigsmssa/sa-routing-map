@@ -269,7 +269,7 @@ function openSV(latlng, title){
 
 // ---- layers
 const schoolMarkers = {}, typeMarkers = {Primary:[],High:[],Combined:[]};
-let depotMarkers = [], labelMarkers = [], zoneLayers = {}, routeObjs = [];
+let depotMarkers = [], labelMarkers = [], zoneLayers = {}, routeObjs = [], routeLines = [], hoverRoute = null;
 const stopMarkers = new Map();   // stop index -> Marker, built lazily for the viewport
 const STOP_ZOOM = 13;
 const vis = {Primary:true,High:true,Combined:true,Depot:true,Address:true,Stop:false,PrimaryZone:false,HighZone:false};
@@ -477,7 +477,7 @@ function initKey(){
       g.appendChild(l);
     }); keyBody.appendChild(g); });
   if (D.run) { const g = document.createElement('div'); g.className='grp';
-    g.innerHTML = `<div class="static"><i class="ln"></i><span class="nm">Bus route<small>one colour per bus · numbered pickup stops · pick a school to see its buses</small></span></div>`; keyBody.appendChild(g); }
+    g.innerHTML = `<div class="static"><i class="ln"></i><span class="nm">Bus route<small>arrows show direction of travel · numbered pickup stops run depot → school · hover a bus to trace it</small></span></div>`; keyBody.appendChild(g); }
   const g2 = document.createElement('div'); g2.className='grp';
   g2.innerHTML = `<div class="static"><span class="nm" style="grid-column:1/-1">Street View<small>drag the pegman (bottom right), or double-click any school, depot or address dot</small></span></div>`;
   keyBody.appendChild(g2);
@@ -548,6 +548,9 @@ function initList(){
     if (current) showList();
   });
   document.getElementById('rhead').onclick = e => { if (e.target.id==='showall') { e.preventDefault(); focusRoute = null; select(current); } };
+  const routesPane = document.getElementById('routes');
+  routesPane.addEventListener('mouseover', e => { const r = e.target.closest('.route'); if (r) emphasise(+r.dataset.i); });
+  routesPane.addEventListener('mouseleave', () => emphasise(null));
   document.getElementById('routes').onclick = e => { const r = e.target.closest('.route'); if (!r) return;
     const i = +r.dataset.i; focusRoute = (focusRoute===i)?null:i; select(current); };
   renderList();
@@ -560,7 +563,20 @@ function renderList(){ const f = q.value.trim().toLowerCase();
 }
 
 // ---- school detail (view 2)
-function clearRoutes(){ routeObjs.forEach(o=>o.setMap(null)); routeObjs = []; }
+function clearRoutes(){ routeObjs.forEach(o=>o.setMap(null)); routeObjs = []; routeLines = []; hoverRoute = null; }
+// direction arrows ride along the line; spacing in % so short and long routes both read well
+const ARROW = {path:'M 0,-1.1 L 1.5,1.4 L 0,0.55 L -1.5,1.4 Z', fillOpacity:1, strokeOpacity:0, scale:3.4};
+function arrows(c, n){ const a = []; for (let i=0;i<n;i++) a.push({icon:{...ARROW, fillColor:c}, offset:((i+0.5)*100/n)+'%'}); return a; }
+// emphasise one bus without hiding the others, so a hovered route can be traced through the clutter
+function emphasise(i){
+  if (hoverRoute === i) return; hoverRoute = i;
+  routeLines.forEach(r => {
+    const on = (i === null || r.i === i);
+    r.main.setOptions({strokeOpacity: on ? .95 : .18, strokeWeight: (i === r.i) ? 5 : 3.5, zIndex: (i === r.i) ? 13 : 11});
+    r.halo.setOptions({strokeOpacity: on ? .55 : .08, zIndex: (i === r.i) ? 12 : 10});
+    r.markers.forEach(m => m.setOpacity(on ? 1 : .25));
+  });
+}
 function dim(name){
   D.schools.forEach(s => { const m = schoolMarkers[s.name]; if (!vis[s.type]) return;
     const size = Math.round(18 + Math.min(14, s.students/60));
@@ -595,15 +611,21 @@ function select(name){
   routes.forEach((r,i)=>{ const c = RC[i%RC.length];
     if (focusRoute !== null && focusRoute !== i) return;
     const path = r.line.map(p=>({lat:p[0],lng:p[1]}));
+    const mine = [];
     if (path.length) {
-      routeObjs.push(new google.maps.Polyline({path, map, strokeColor:'#0b0d12', strokeWeight:7, strokeOpacity:.55, zIndex:10, clickable:false}));
-      const pl = new google.maps.Polyline({path, map, strokeColor:c, strokeWeight:3.5, strokeOpacity:.95, zIndex:11, clickable:true});
-      const html = `<span class="tag" style="--c:${c}">Bus route</span><br><b>${r.code} · bus ${r.bus||'unassigned'}</b><br><span class="k">${r.students} students · ${r.stops.length} stops · ${r.km} km</span><br><span class="k">leaves ${esc(r.depot)} ${r.depart} → arrives ${r.arrive}</span>`;
-      pl.addListener('mouseover', e => showTip(html, px(e.latLng).x, px(e.latLng).y));
+      // line runs depot -> stops -> school, so arrows show the real direction of travel
+      const nArrow = focusRoute !== null ? 26 : (many ? 7 : 12);
+      const halo = new google.maps.Polyline({path, map, strokeColor:'#0b0d12', strokeWeight:7, strokeOpacity:.55, zIndex:10, clickable:false});
+      routeObjs.push(halo);
+      const pl = new google.maps.Polyline({path, map, strokeColor:c, strokeWeight:3.5, strokeOpacity:.95, zIndex:11, clickable:true,
+                                           icons: arrows(c, nArrow)});
+      const html = `<span class="tag" style="--c:${c}">Bus route</span><br><b>${r.code} · bus ${r.bus||'unassigned'}</b><br><span class="k">${r.students} students · ${r.stops.length} stops · ${r.km} km</span><br><span class="k">leaves ${esc(r.depot)} ${r.depart} → arrives ${r.arrive}</span><br><span class="k">arrows point the way the bus drives</span>`;
+      pl.addListener('mouseover', e => { emphasise(i); showTip(html, px(e.latLng).x, px(e.latLng).y); });
       pl.addListener('mousemove', e => showTip(html, px(e.latLng).x, px(e.latLng).y));
-      pl.addListener('mouseout', hideTip);
+      pl.addListener('mouseout', () => { emphasise(null); hideTip(); });
       pl.addListener('click', ()=>{ focusRoute = (focusRoute===i)?null:i; select(current); });
       routeObjs.push(pl);
+      routeLines.push({i, main:pl, halo, markers:mine});
       path.forEach(p=>bounds.extend(p));
     }
     r.stops.forEach(st => {
@@ -611,17 +633,17 @@ function select(name){
       const m = new google.maps.Marker({position:pos, map, zIndex:700+st.seq,
         icon: many ? svgIcon(dotSvg(c),12) : svgIcon(seqSvg(st.seq,c),20)});
       const html = `<span class="tag" style="--c:${c}">Pickup stop ${st.seq} of ${r.stops.length}</span><br><b>${esc(st.addr)}</b><br><span class="k">${r.code} picks up at ${st.t}</span><br><span class="k">+${st.on} boarding · ${st.load} on board · ${st.ride.toFixed(0)} min to school</span><span class="sv">double-click for Street View</span>`;
-      m.addListener('mouseover', ()=>tipAt(html, m.getPosition()));
-      m.addListener('mouseout', hideTip);
+      m.addListener('mouseover', ()=>{ emphasise(i); tipAt(html, m.getPosition()); });
+      m.addListener('mouseout', ()=>{ emphasise(null); hideTip(); });
       m.addListener('dblclick', ()=>openSV(pos, st.addr));
-      routeObjs.push(m); bounds.extend(pos);
+      routeObjs.push(m); mine.push(m); bounds.extend(pos);
     });
     const dm = new google.maps.Marker({position:{lat:r.depot_ll[0],lng:r.depot_ll[1]}, map, icon:svgIcon(sym('Depot',22),22), zIndex:650, clickable:false});
     routeObjs.push(dm); bounds.extend({lat:r.depot_ll[0],lng:r.depot_ll[1]});
   });
   fit(bounds);
   rhead.innerHTML = `<span>${focusRoute!==null ? 'Showing 1 of '+routes.length+' buses' : routes.length+' buses'}</span>` +
-    (focusRoute!==null ? `<a href="#" id="showall">Show all buses</a>` : routes.length>1 ? `<span style="text-transform:none;letter-spacing:0;font-weight:400">click a bus to isolate it</span>` : '');
+    (focusRoute!==null ? `<a href="#" id="showall">Show all buses</a>` : routes.length>1 ? `<span style="text-transform:none;letter-spacing:0;font-weight:400">hover to trace · click to isolate</span>` : '');
   routesEl.innerHTML = routes.map((r,i)=>`<button class="route${focusRoute===i?' active':''}" data-i="${i}" style="--c:${RC[i%RC.length]}"><i></i><div class="t">Route ${r.code}<small>Bus ${r.bus||'unassigned'} · from ${esc(r.depot)}</small></div><div class="k">${r.students} students · ${r.stops.length} stops<br>${r.depart} → ${r.arrive} · ${r.km} km</div></button>`).join('');
   const act = routesEl.querySelector('.route.active'); if (act) act.scrollIntoView({block:'nearest'});
 }

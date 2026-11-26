@@ -207,7 +207,7 @@ const LIGHT = [
   {featureType:'water',elementType:'labels.text.fill',stylers:[{color:'#7ea2bf'}]},
 ];
 // label + dot colours have to flip with the basemap or they vanish
-const THEME = {light:{label:'#1f2430', addr:'#1d4ed8'}, dark:{label:'#ffffff', addr:'#60a5fa'}};
+const THEME = {light:{label:'#1f2430', addr:'#1d4ed8', walk:'#0f766e', walkHi:'#b45309'}, dark:{label:'#ffffff', addr:'#60a5fa', walk:'#5eead4', walkHi:'#fbbf24'}};
 let theme = 'light';
 
 let map, sv, svPano, tipEl, keyEl, mapEl;
@@ -339,12 +339,16 @@ function syncZoom(){
 // 7.5k stop pins at once would swamp the map, so only build what's on screen
 function syncStops(){
   if (!D.stops || !D.stops.length) return;
-  const show = vis.Stop && map.getZoom() >= STOP_ZOOM && !document.body.classList.contains('svopen');
+  const show = vis.Stop && !document.body.classList.contains('svopen')
+               && (map.getZoom() >= STOP_ZOOM || walkSchool !== null);
   if (!show){ stopMarkers.forEach(m=>m.setMap(null)); stopMarkers.clear(); return; }
   const b = map.getBounds(); if (!b) return;
   const want = new Set();
   for (let i=0;i<D.stops.length;i++){
     const st = D.stops[i];
+    // Zoomed out for a selected school: only that school's stops, or the map
+    // fills with stops belonging to schools you aren't looking at.
+    if (walkStops && map.getZoom() < STOP_ZOOM && !walkStops.has(i)) continue;
     if (!b.contains({lat:st[0],lng:st[1]})) continue;
     want.add(i);
     if (stopMarkers.has(i)) continue;
@@ -354,8 +358,8 @@ function syncStops(){
       + (st[3] ? `<br><span class="k">Stop ${esc(st[3])}</span>` : '')
       + `<br><span class="k">${st[5]} student address${st[5]===1?'':'es'} assigned${st[4]?' · shelter':''}</span>`
       + `<span class="sv">double-click for Street View</span>`;
-    m.addListener('mouseover', ()=>tipAt(html, m.getPosition()));
-    m.addListener('mouseout', hideTip);
+    m.addListener('mouseover', ()=>{ hoverStop = i; drawAddr(); tipAt(html, m.getPosition()); });
+    m.addListener('mouseout', ()=>{ if (hoverStop === i){ hoverStop = null; drawAddr(); } hideTip(); });
     m.addListener('dblclick', ()=>openSV({lat:st[0],lng:st[1]}, st[2]));
     stopMarkers.set(i, m);
   }
@@ -365,6 +369,24 @@ function syncStops(){
 // ---- 18k student addresses on a canvas overlay (markers would crawl); hover handled by a screen-space grid
 const cv = document.getElementById('addrCanvas'); const cx = cv.getContext('2d');
 let grid = null, gridZ = null, hoverAddr = null;
+// index of the selected school: when set, only its students get walk lines
+let walkSchool = null;
+// stop indices used by the selected school, so we don't draw the other ~4.7k
+let walkStops = null;
+// stop index currently hovered, for the 'who feeds this stop' highlight
+let hoverStop = null;
+function setWalkSchool(si){
+  walkSchool = si;
+  walkStops = null;
+  if (si === null) return;
+  const set = new Set();
+  for (let i=0;i<D.addresses.length;i++){
+    const a = D.addresses[i];
+    if (a[4] === undefined) continue;
+    if (a[3].some(g=>g[0]===si)) set.add(a[4]);
+  }
+  walkStops = set;
+}
 function initAddr(){
   const ro = new ResizeObserver(()=>{ sizeCanvas(); drawAddr(); }); ro.observe(mapEl);
   sizeCanvas();
@@ -408,6 +430,61 @@ function drawAddr(){
   const s0 = sw.lat(), n0 = ne.lat(), w0 = sw.lng(), e0 = ne.lng(), wrap = w0 > e0;
   const scale = Math.pow(2, z), o = merc(n0, w0);          // container origin = NW corner
   const g = interactive ? new Map() : null;
+  // Straight home -> assigned stop lines. Canvas, not Polylines: there are
+  // 16.6k of them and markers would crawl. Drawn first so dots sit on top.
+  const showWalk = vis.Stop && D.stops && D.stops.length
+                   && (z >= STOP_ZOOM || walkSchool !== null);
+  if (showWalk){
+    cx.save();
+    cx.strokeStyle = THEME[theme].walk;
+    cx.globalAlpha = walkSchool === null ? .33 : .62;
+    cx.lineWidth = walkSchool === null ? 1 : 1.4;
+    cx.beginPath();
+    let drawn = 0;
+    for (let i=0;i<D.addresses.length;i++){
+      const a = D.addresses[i];
+      if (a[4] === undefined) continue;                       // no stop in range
+      if (walkSchool !== null && !a[3].some(g=>g[0]===walkSchool)) continue;
+      const la = a[0], lo = a[1];
+      if (la < s0 || la > n0) continue;
+      if (wrap ? (lo < w0 && lo > e0) : (lo < w0 || lo > e0)) continue;
+      const st = D.stops[a[4]]; if (!st) continue;
+      const m1 = merc(la, lo), x1 = (m1.x-o.x)*scale, y1 = (m1.y-o.y)*scale;
+      if (x1 < -40 || y1 < -40 || x1 > r.width+40 || y1 > r.height+40) continue;
+      const m2 = merc(st[0], st[1]), x2 = (m2.x-o.x)*scale, y2 = (m2.y-o.y)*scale;
+      cx.moveTo(x1, y1); cx.lineTo(x2, y2);
+      if (++drawn > 12000) break;                             // safety valve
+    }
+    cx.stroke();
+    cx.restore();
+  }
+
+  // Hover highlight: bright lines for the stop (all its students) or the home
+  // (its one stop) under the cursor. Works even when the faint layer is off.
+  const hs = hoverStop !== null ? hoverStop : (hoverAddr && hoverAddr[4] !== undefined ? hoverAddr[4] : null);
+  if (hs !== null && D.stops && D.stops[hs]){
+    const st = D.stops[hs];
+    const m2 = merc(st[0], st[1]), x2 = (m2.x-o.x)*scale, y2 = (m2.y-o.y)*scale;
+    const only = hoverStop === null ? hoverAddr : null;   // hovering a home = just that one
+    cx.save();
+    cx.strokeStyle = THEME[theme].walkHi; cx.lineWidth = 1.6; cx.globalAlpha = .95;
+    cx.beginPath();
+    let n = 0;
+    for (let i=0;i<D.addresses.length;i++){
+      const a = D.addresses[i];
+      if (a[4] !== hs) continue;
+      if (only && a !== only) continue;
+      if (walkSchool !== null && !a[3].some(g=>g[0]===walkSchool)) continue;
+      const m1 = merc(a[0], a[1]), x1 = (m1.x-o.x)*scale, y1 = (m1.y-o.y)*scale;
+      cx.moveTo(x1, y1); cx.lineTo(x2, y2); n++;
+    }
+    cx.stroke();
+    // ring the stop so the fan has an obvious anchor
+    cx.beginPath(); cx.arc(x2, y2, 6, 0, 6.2832);
+    cx.strokeStyle = THEME[theme].walkHi; cx.lineWidth = 2; cx.stroke();
+    cx.restore();
+  }
+
   cx.fillStyle = THEME[theme].addr; cx.globalAlpha = interactive ? .85 : .6;
   cx.beginPath();
   for (let i=0;i<D.addresses.length;i++){
@@ -472,14 +549,14 @@ function initKey(){
     [['Depot',LABEL.Depot,'where buses start and end the day',true],
      ['Address',LABEL.Address,'one dot per home · zoom in and hover for students & school',true]],
     (D.stops && D.stops.length
-      ? [['Stop',LABEL.Stop,'only stops that pick students up · zoom in to show · hover for numbers',false]] : []),
+      ? [['Stop',LABEL.Stop,'only stops that pick students up · lines link each home to its stop · zoom in to show',false]] : []),
     Object.keys(zoneLayers).map(k=>[k+'Zone',k+' school zones','official DfE catchment boundaries',false]),
   ];
   const keyBody = document.getElementById('keyBody');
   keyRows.forEach(grp => { if (!grp.length) return; const g = document.createElement('div'); g.className='grp';
     grp.forEach(([type,name,desc,on])=>{
       const l = document.createElement('label'); l.className = on?'':'off';
-      l.innerHTML = `<span class="ic">${sym(type,24)}</span><span class="nm">${name}<small>${desc}</small></span><input type="checkbox" ${on?'checked':''}><span class="sw"></span>`;
+      l.innerHTML = `<span class="ic">${sym(type,24)}</span><span class="nm">${name}<small>${desc}</small></span><input type="checkbox" data-layer="${type}" ${on?'checked':''}><span class="sw"></span>`;
       l.querySelector('input').onchange = e => { l.classList.toggle('off', !e.target.checked); setLayer(type, e.target.checked); };
       g.appendChild(l);
     }); keyBody.appendChild(g); });
@@ -493,6 +570,14 @@ function initKey(){
     keyEl.addEventListener(ev, e=>e.stopPropagation(), {passive:false}));
   ['mousedown','dblclick','wheel','touchstart'].forEach(ev =>
     document.getElementById('base').addEventListener(ev, e=>e.stopPropagation(), {passive:false}));
+}
+// Flip a layer *and* its legend checkbox, so programmatic changes don't
+// leave the key showing the wrong state.
+function setLayerUI(type, on){
+  if (vis[type] === on) return;
+  const cb = keyEl.querySelector(`input[data-layer="${type}"]`);
+  if (cb){ cb.checked = on; cb.closest('label').classList.toggle('off', !on); }
+  setLayer(type, on);
 }
 function setLayer(type, on){
   vis[type] = on;
@@ -638,6 +723,7 @@ function showList(){
   document.getElementById('viewDetail').classList.add('hide');
   document.getElementById('viewList').classList.remove('hide');
   current = null; focusRoute = null; clearRoutes(); dim(null);
+  setWalkSchool(null); drawAddr(); syncStops();
   renderList(); const act = listEl.querySelector('.row.active'); if (act) act.scrollIntoView({block:'center'});
 }
 function fit(bounds){
@@ -647,6 +733,14 @@ function fit(bounds){
 function select(name){
   if (name !== current) focusRoute = null;
   current = name; clearRoutes();
+  // Looking at one school's buses: show the stops without making the user
+  // hunt for the toggle, and narrow walk lines to that school's students.
+  const si = D.schools.findIndex(x=>x.name===name);
+  setWalkSchool(si < 0 ? null : si);
+  if (D.stops && D.stops.length) setLayerUI('Stop', true);
+  // setLayerUI no-ops when the layer is already on, but the school scope just
+  // changed, so refresh the pins and lines either way.
+  syncStops(); drawAddr();
   document.getElementById('viewList').classList.add('hide');
   document.getElementById('viewDetail').classList.remove('hide');
   const s = D.schools.find(x=>x.name===name);

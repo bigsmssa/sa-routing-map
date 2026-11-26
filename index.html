@@ -304,7 +304,7 @@ function initLayers(){
       icon:{url:BLANK, scaledSize:new google.maps.Size(1,1), anchor:new google.maps.Point(0,0),
             labelOrigin:new google.maps.Point(0, size/2 + 9)},
       label:{text:s.name, color:THEME.light.label, fontSize:'11px', fontWeight:'500'}});
-    labelMarkers.push({m:lbl, type:s.type});
+    labelMarkers.push({m:lbl, type:s.type, name:s.name});
   });
   // depots
   depotMarkers = D.depots.map(d => {
@@ -315,6 +315,7 @@ function initLayers(){
     m.addListener('mouseover', ()=>tipAt(html, m.getPosition()));
     m.addListener('mouseout', hideTip);
     m.addListener('dblclick', ()=>openSV(m.getPosition().toJSON(), d.name));
+    m.__depot = d.name;
     return m;
   });
   // zones
@@ -332,7 +333,10 @@ function initLayers(){
 }
 function syncZoom(){
   const z = map.getZoom(), on = z >= LABEL_ZOOM;
-  labelMarkers.forEach(({m,type}) => m.setMap(on && vis[type] ? map : null));
+  labelMarkers.forEach(({m,type,name}) => {
+    const mine = !current || name === current;
+    m.setMap(on && vis[type] && mine ? map : null);
+  });
   drawAddr(); syncStops();
 }
 
@@ -373,19 +377,28 @@ let grid = null, gridZ = null, hoverAddr = null;
 let walkSchool = null;
 // stop indices used by the selected school, so we don't draw the other ~4.7k
 let walkStops = null;
+// address indices for the selected school; looping these beats testing all 18k
+let focusAddrs = null;
+// depot names the selected school's buses actually run from
+let focusDepots = null;
 // stop index currently hovered, for the 'who feeds this stop' highlight
 let hoverStop = null;
 function setWalkSchool(si){
   walkSchool = si;
-  walkStops = null;
+  walkStops = focusAddrs = focusDepots = null;
   if (si === null) return;
-  const set = new Set();
+  const stops = new Set(), addrs = [];
   for (let i=0;i<D.addresses.length;i++){
     const a = D.addresses[i];
-    if (a[4] === undefined) continue;
-    if (a[3].some(g=>g[0]===si)) set.add(a[4]);
+    if (!a[3].some(g=>g[0]===si)) continue;      // not one of this school's students
+    addrs.push(i);
+    if (a[4] !== undefined) stops.add(a[4]);
   }
-  walkStops = set;
+  walkStops = stops; focusAddrs = addrs;
+  const routes = D.run && D.run.schools[D.schools[si].name];
+  // No routes embedded for this school: show no depots rather than all 10,
+  // so focus mode never reveals data unrelated to the selection.
+  focusDepots = new Set(routes ? routes.map(r=>r.depot) : []);
 }
 function initAddr(){
   const ro = new ResizeObserver(()=>{ sizeCanvas(); drawAddr(); }); ro.observe(mapEl);
@@ -441,10 +454,10 @@ function drawAddr(){
     cx.lineWidth = walkSchool === null ? 1 : 1.4;
     cx.beginPath();
     let drawn = 0;
-    for (let i=0;i<D.addresses.length;i++){
-      const a = D.addresses[i];
+    const wIdx = focusAddrs, wN = wIdx ? wIdx.length : D.addresses.length;
+    for (let j=0;j<wN;j++){
+      const a = D.addresses[wIdx ? wIdx[j] : j];
       if (a[4] === undefined) continue;                       // no stop in range
-      if (walkSchool !== null && !a[3].some(g=>g[0]===walkSchool)) continue;
       const la = a[0], lo = a[1];
       if (la < s0 || la > n0) continue;
       if (wrap ? (lo < w0 && lo > e0) : (lo < w0 || lo > e0)) continue;
@@ -470,11 +483,11 @@ function drawAddr(){
     cx.strokeStyle = THEME[theme].walkHi; cx.lineWidth = 1.6; cx.globalAlpha = .95;
     cx.beginPath();
     let n = 0;
-    for (let i=0;i<D.addresses.length;i++){
-      const a = D.addresses[i];
+    const hIdx = focusAddrs, hN = hIdx ? hIdx.length : D.addresses.length;
+    for (let j=0;j<hN;j++){
+      const a = D.addresses[hIdx ? hIdx[j] : j];
       if (a[4] !== hs) continue;
       if (only && a !== only) continue;
-      if (walkSchool !== null && !a[3].some(g=>g[0]===walkSchool)) continue;
       const m1 = merc(a[0], a[1]), x1 = (m1.x-o.x)*scale, y1 = (m1.y-o.y)*scale;
       cx.moveTo(x1, y1); cx.lineTo(x2, y2); n++;
     }
@@ -487,8 +500,11 @@ function drawAddr(){
 
   cx.fillStyle = THEME[theme].addr; cx.globalAlpha = interactive ? .85 : .6;
   cx.beginPath();
-  for (let i=0;i<D.addresses.length;i++){
-    const a = D.addresses[i], la = a[0], lo = a[1];
+  // Focus mode: walk only this school's homes rather than testing all 18k.
+  const addrIdx = focusAddrs;
+  const nAddr = addrIdx ? addrIdx.length : D.addresses.length;
+  for (let j=0;j<nAddr;j++){
+    const a = D.addresses[addrIdx ? addrIdx[j] : j], la = a[0], lo = a[1];
     if (la < s0 || la > n0) continue;
     if (wrap ? (lo < w0 && lo > e0) : (lo < w0 || lo > e0)) continue;
     const m = merc(la, lo), x = (m.x-o.x)*scale, y = (m.y-o.y)*scale;
@@ -583,9 +599,11 @@ function setLayer(type, on){
   vis[type] = on;
   if (type==='Address') { drawAddr(); return; }
   if (type==='Stop') { syncStops(); return; }
-  if (type==='Depot') { depotMarkers.forEach(m=>m.setMap(on?map:null)); return; }
+  // Depot / school-type toggles route through dim() so turning a layer back on
+  // respects focus mode instead of re-showing every school in the state.
+  if (type==='Depot') { dim(current); return; }
   if (type.endsWith('Zone')) { const k = type.replace('Zone',''); zoneLayers[k].setMap(on?map:null); return; }
-  typeMarkers[type].forEach(m=>m.setMap(on?map:null));
+  dim(current);
   syncZoom();
 }
 
@@ -715,9 +733,23 @@ function emphasise(i){
   });
 }
 function dim(name){
-  D.schools.forEach(s => { const m = schoolMarkers[s.name]; if (!vis[s.type]) return;
-    const size = Math.round(18 + Math.min(14, s.students/60));
-    m.setOpacity(name && s.name!==name ? .3 : 1); m.setZIndex(name && s.name===name ? 900 : 400+Math.round(s.students/10)); });
+  // Focus mode: the other 229 schools (and their labels/depots) are clutter
+  // when you're looking at one school, so hide them rather than dim them.
+  D.schools.forEach(s => {
+    const m = schoolMarkers[s.name]; if (!m) return;
+    const mine = !name || s.name === name;
+    m.setMap(mine && vis[s.type] ? map : null);
+    m.setOpacity(1);
+    m.setZIndex(name && s.name===name ? 900 : 400+Math.round(s.students/10));
+  });
+  labelMarkers.forEach(({m,type,name:n}) => {
+    const mine = !name || n === name;
+    m.setMap(mine && vis[type] && map.getZoom() >= LABEL_ZOOM ? map : null);
+  });
+  depotMarkers.forEach(m => {
+    const mine = !name || (focusDepots ? focusDepots.has(m.__depot) : true);
+    m.setMap(mine && vis.Depot ? map : null);
+  });
 }
 function showList(){
   document.getElementById('viewDetail').classList.add('hide');

@@ -346,9 +346,9 @@ function syncStops(){
   const want = new Set();
   for (let i=0;i<D.stops.length;i++){
     const st = D.stops[i];
-    // Zoomed out for a selected school: only that school's stops, or the map
-    // fills with stops belonging to schools you aren't looking at.
-    if (walkStops && map.getZoom() < STOP_ZOOM && !walkStops.has(i)) continue;
+    // A school is selected: show only that school's stops, at every zoom.
+    // Other schools' stops are noise when you're looking at one school.
+    if (walkStops && !walkStops.has(i)) continue;
     if (!b.contains({lat:st[0],lng:st[1]})) continue;
     want.add(i);
     if (stopMarkers.has(i)) continue;
